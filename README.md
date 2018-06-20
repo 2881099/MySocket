@@ -2,7 +2,7 @@ Socket服务端与客户端的封装（基于线程），支持.NETCore
 
 # 安装
 
-> Install-Package MySocket -Version 1.0.0
+> Install-Package MySocket -Version 1.0.1
 
 # 服务端
 
