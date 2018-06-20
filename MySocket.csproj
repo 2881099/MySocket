@@ -4,14 +4,18 @@
     <AssemblyName>MySocket</AssemblyName>
     <PackageId>MySocket</PackageId>
     <RootNamespace>MySocket</RootNamespace>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageProjectUrl>https://github.com/2881099/MySocket</PackageProjectUrl>
     <Description>Socket服务端与客户端的封装（基于线程），支持.NETCore</Description>
     <RepositoryUrl>https://github.com/2881099/MySocket</RepositoryUrl>
     <PackageTags>socket server client 服务端 客户端</PackageTags>
+    <WarningLevel>3</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DocumentationFile>bin\Debug\netstandard2.0\MySocket.xml</DocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="WorkQueue" Version="1.0.1" />
+    <PackageReference Include="WorkQueue" Version="1.0.2" />
   </ItemGroup>
 </Project>
