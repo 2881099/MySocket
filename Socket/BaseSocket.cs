@@ -8,6 +8,7 @@ using System.Runtime.Serialization.Json;
 
 public class BaseSocket {
 
+	public static int HeadLength = 8;
 	public static byte[] Read(Stream stream, byte[] end) {
 		using (MemoryStream ms = new MemoryStream()) {
 			byte[] data = new byte[1];
@@ -20,36 +21,41 @@ public class BaseSocket {
 		}
 	}
 	protected void Write(Stream stream, SocketMessager messager) {
+		var buffer = this.GetWriteBuffer(messager);
+		stream.Write(buffer, 0, buffer.Length);
+	}
+	protected void WriteAsync(Stream stream, SocketMessager messager) {
+		var buffer = this.GetWriteBuffer(messager);
+		stream.WriteAsync(buffer, 0, buffer.Length);
+	}
+	protected byte[] GetWriteBuffer(SocketMessager messager) {
 		using (MemoryStream ms = new MemoryStream()) {
 			byte[] buff = Encoding.UTF8.GetBytes(messager.GetCanParseString());
 			ms.Write(buff, 0, buff.Length);
 			if (messager.Arg != null) {
-				using(MemoryStream msArg = new MemoryStream(BaseSocket.Serialize(messager.Arg))) {
-					using (DeflateStream ds = new DeflateStream(msArg, CompressionMode.Compress)) {
-						using (MemoryStream msBuf = new MemoryStream()) {
-							ds.CopyTo(msBuf);
-							buff = msBuf.ToArray();
-							ms.Write(buff, 0, buff.Length);
-						}
+				var data = BaseSocket.Serialize(messager.Arg);
+				using (MemoryStream msBuf = new MemoryStream()) {
+					using (DeflateStream ds = new DeflateStream(msBuf, CompressionMode.Compress)) {
+						ds.Write(data, 0, data.Length);
+						buff = msBuf.ToArray();
+						ms.Write(buff, 0, buff.Length);
 					}
 				}
 			}
-			this.Write(stream, ms.ToArray());
+			return this.GetWriteBuffer(ms.ToArray());
 		}
-		
 	}
-	private void Write(Stream stream, byte[] data) {
+	private byte[] GetWriteBuffer(byte[] data) {
 		using (MemoryStream ms = new MemoryStream()) {
-			byte[] buff = Encoding.UTF8.GetBytes(Convert.ToString(data.Length + 8, 16).PadRight(8));
+			byte[] buff = Encoding.UTF8.GetBytes(Convert.ToString(data.Length + BaseSocket.HeadLength, 16).PadRight(BaseSocket.HeadLength));
 			ms.Write(buff, 0, buff.Length);
 			ms.Write(data, 0, data.Length);
-			buff = ms.ToArray();
-			stream.Write(buff, 0, buff.Length);
+			return ms.ToArray();
 		}
 	}
 
 	protected SocketMessager Read(Stream stream) {
-		byte[] data = new byte[8];
+		byte[] data = new byte[BaseSocket.HeadLength];
 		int bytes = 0;
 		int overs = data.Length;
 		string size = string.Empty;
@@ -62,7 +68,7 @@ public class BaseSocket {
 		if (int.TryParse(size, NumberStyles.HexNumber, null, out overs) == false) {
 			return null;
 		}
-		overs -= data.Length;
+		overs -= BaseSocket.HeadLength;
 		using (MemoryStream ms = new MemoryStream()) {
 			data = new Byte[1024];
 			while (overs > 0) {
@@ -70,9 +76,8 @@ public class BaseSocket {
 				overs -= bytes;
 				ms.Write(data, 0, bytes);
 			}
-			data = ms.ToArray();
+			return SocketMessager.Parse(ms.ToArray());
 		}
-		return SocketMessager.Parse(data);
 	}
 
 	public static byte[] Serialize(object obj) {
@@ -141,6 +146,7 @@ public class SocketMessager {
 	internal static readonly SocketMessager SYS_TEST_LINK = new SocketMessager("\0");
 	internal static readonly SocketMessager SYS_HELLO_WELCOME = new SocketMessager("Hello, Welcome!");
 	internal static readonly SocketMessager SYS_ACCESS_DENIED = new SocketMessager("Access Denied.");
+	internal static readonly SocketMessager SYS_QUIT = new SocketMessager("Hi, Bye Bye!");
 
 	private int _id;
 	private string _action;
@@ -206,7 +212,7 @@ public class SocketMessager {
 			using (DeflateStream ds = new DeflateStream(ms, CompressionMode.Decompress)) {
 				using (MemoryStream msOut = new MemoryStream()) {
 					ds.CopyTo(msOut);
-					messager = new SocketMessager(loc3, loc4, ms.Length > 0 ? BaseSocket.Deserialize(msOut.ToArray()) : null);
+					messager = new SocketMessager(loc3, loc4, ms.Length > 0 ? BaseSocket.Deserialize(ms.ToArray()) : null);
 				}
 			}
 		}

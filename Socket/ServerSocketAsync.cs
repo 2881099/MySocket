@@ -1,31 +1,32 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 
-public class ServerSocket : IDisposable {
+public class ServerSocketAsync : IDisposable {
 
 	private TcpListener _tcpListener;
-	private Thread _tcpListenerThread;
 	private Dictionary<int, AcceptSocket> _clients = new Dictionary<int, AcceptSocket>();
 	private object _clients_lock = new object();
 	private int _id = 1;
 	private int _port;
 	private bool _running;
-	private ManualResetEvent _stopWait;
 	public event AcceptedEventHandler Accepted;
 	public event ClosedEventHandler Closed;
 	public event ReceiveEventHandler Receive;
 	public event ErrorEventHandler Error;
 
-	private WorkQueue _acceptWQ;
 	internal WorkQueue _receiveWQ;
 	internal WorkQueue _receiveSyncWQ;
 	private WorkQueue _writeWQ;
 
-	public ServerSocket(int port) {
+	private IAsyncResult _beginAcceptTcpClient;
+
+	public ServerSocketAsync(int port) {
 		this._port = port;
 	}
 
@@ -35,7 +36,6 @@ public class ServerSocket : IDisposable {
 			try {
 				this._tcpListener = new TcpListener(IPAddress.Any, this._port);
 				this._tcpListener.Start();
-				this._acceptWQ = new WorkQueue();
 				this._receiveWQ = new WorkQueue();
 				this._receiveSyncWQ = new WorkQueue();
 				this._writeWQ = new WorkQueue();
@@ -44,70 +44,62 @@ public class ServerSocket : IDisposable {
 				this.OnError(ex);
 				return;
 			}
-			this._tcpListenerThread = new Thread(delegate() {
-				while (this._running) {
-					try {
-						TcpClient tcpClient = this._tcpListener.AcceptTcpClientAsync().Result;
-						this._acceptWQ.Enqueue(delegate() {
-							try {
-								AcceptSocket acceptSocket = new AcceptSocket(this, tcpClient, this._id);
-								this.OnAccepted(acceptSocket);
-							} catch (Exception ex) {
-								this.OnError(ex);
-							}
-						});
-					} catch (Exception ex) {
-						this.OnError(ex);
-					}
-				}
-
-				int[] keys = new int[this._clients.Count];
-				try {
-					this._clients.Keys.CopyTo(keys, 0);
-				} catch {
-					lock (this._clients_lock) {
-						keys = new int[this._clients.Count];
-						this._clients.Keys.CopyTo(keys, 0);
-					}
-				}
-				foreach (int key in keys) {
-					AcceptSocket client = null;
-					if (this._clients.TryGetValue(key, out client)) {
-						client.Close();
-					}
-				}
-				if (this._acceptWQ != null) {
-					this._acceptWQ.Dispose();
-				}
-				if (this._receiveWQ != null) {
-					this._receiveWQ.Dispose();
-				}
-				if (this._receiveSyncWQ != null) {
-					this._receiveSyncWQ.Dispose();
-				}
-				if (this._writeWQ != null) {
-					this._writeWQ.Dispose();
-				}
-				if (this._clients != null) {
-					this._clients.Clear();
-				}
-				if (this._stopWait != null) {
-					this._stopWait.Set();
-				}
-			});
-			this._tcpListenerThread.Start();
+			this._beginAcceptTcpClient = this._tcpListener.BeginAcceptTcpClient(HandleTcpClientAccepted, null);
 		}
 	}
 
+	private void HandleTcpClientAccepted(IAsyncResult ar) {
+		if (this._running) {
+			try {
+				TcpClient tcpClient = this._tcpListener.EndAcceptTcpClient(ar);
+
+				try {
+					AcceptSocket acceptSocket = new AcceptSocket(this, tcpClient, this._id);
+					this.OnAccepted(acceptSocket);
+				} catch (Exception ex) {
+					this.OnError(ex);
+				}
+
+				this._beginAcceptTcpClient = this._tcpListener.BeginAcceptTcpClient(HandleTcpClientAccepted, null);
+			} catch (Exception ex) {
+				this.OnError(ex);
+			}
+		}
+	}
 	public void Stop() {
 		if (this._tcpListener != null) {
 			this._tcpListener.Stop();
 		}
 		if (this._running == true) {
-			this._stopWait = new ManualResetEvent(false);
-			this._stopWait.Reset();
+			this._beginAcceptTcpClient.AsyncWaitHandle.Close();
+
 			this._running = false;
-			this._stopWait.WaitOne();
+
+			int[] keys = new int[this._clients.Count];
+			try {
+				this._clients.Keys.CopyTo(keys, 0);
+			} catch {
+				lock (this._clients_lock) {
+					keys = new int[this._clients.Count];
+					this._clients.Keys.CopyTo(keys, 0);
+				}
+			}
+			foreach (int key in keys) {
+				AcceptSocket client = null;
+				if (this._clients.TryGetValue(key, out client)) {
+					client.Close();
+				}
+			}
+			if (this._receiveWQ != null) {
+				this._receiveWQ.Dispose();
+			}
+			if (this._receiveSyncWQ != null) {
+				this._receiveSyncWQ.Dispose();
+			}
+			if (this._writeWQ != null) {
+				this._writeWQ.Dispose();
+			}
+			this._clients.Clear();
 		}
 	}
 
@@ -217,9 +209,8 @@ public class ServerSocket : IDisposable {
 
 	public class AcceptSocket : BaseSocket, IDisposable {
 
-		private ServerSocket _server;
+		private ServerSocketAsync _server;
 		private TcpClient _tcpClient;
-		private Thread _thread;
 		private bool _running;
 		private int _id;
 		private int _receives;
@@ -230,86 +221,143 @@ public class ServerSocket : IDisposable {
 		private object _receiveHandlers_lock = new object();
 		private DateTime _lastActive;
 		internal bool _accepted;
+		internal IAsyncResult _beginRead;
 
-		public AcceptSocket(ServerSocket server, TcpClient tcpClient, int id) {
+		public AcceptSocket(ServerSocketAsync server, TcpClient tcpClient, int id) {
 			this._running = true;
 			this._id = id;
 			this._server = server;
 			this._tcpClient = tcpClient;
 			this._lastActive = DateTime.Now;
-			this._thread = new Thread(delegate () {
-				while (this._running) {
-					try {
-						NetworkStream ns = this._tcpClient.GetStream();
-						ns.ReadTimeout = 1000 * 20;
-						if (ns.DataAvailable) {
-							SocketMessager messager = base.Read(ns);
-							if (string.Compare(messager.Action, SocketMessager.SYS_QUIT.Action) == 0) {
-								this._running = false;
-								break;
-							} else if (string.Compare(messager.Action, SocketMessager.SYS_TEST_LINK.Action) != 0) {
-								ReceiveEventArgs e = new ReceiveEventArgs(this._receives++, messager, this);
-								SyncReceive receive = null;
+			HandleDataReceived();
+		}
 
-								if (this._receiveHandlers.TryGetValue(messager.Id, out receive)) {
-									this._server._receiveSyncWQ.Enqueue(delegate () {
-										try {
-											receive.ReceiveHandler(this, e);
-										} catch (Exception ex) {
-											this.OnError(ex);
-										} finally {
-											receive.Wait.Set();
-										}
-									});
-								} else {
-									this._server._receiveWQ.Enqueue(delegate () {
-										this.OnReceive(e);
-									});
-								}
-							}
-							this._lastActive = DateTime.Now;
-						} else if (_accepted) {
-							TimeSpan ts = DateTime.Now - _lastActive;
-							if (ts.TotalSeconds > 5) {
-								this.Write(SocketMessager.SYS_TEST_LINK);
-							}
-						}
-						if (!ns.DataAvailable) Thread.CurrentThread.Join(1);
-					} catch (Exception ex) {
-						this._running = false;
-						this.OnError(ex);
-					}
+		private void HandleDataReceived() {
+			if (this._running) {
+				try {
+					NetworkStream ns = this._tcpClient.GetStream();
+					ns.ReadTimeout = 1000 * 20;
+
+					DataReadInfo dr = new DataReadInfo(DataReadInfoType.Head, this, ns, BaseSocket.HeadLength, BaseSocket.HeadLength);
+					dr.BeginRead();
+
+				} catch (Exception ex) {
+					this._running = false;
+					this.OnError(ex);
 				}
-				this.Close();
-				this.OnClosed();
-			});
-			this._thread.Start();
+			}
+		}
+
+		private void OnDataAvailable(DataReadInfo dr) {
+			SocketMessager messager = SocketMessager.Parse(dr.ResponseStream.ToArray());
+			if (string.Compare(messager.Action, SocketMessager.SYS_QUIT.Action) == 0) {
+				dr.AcceptSocket.Close();
+			} else if (string.Compare(messager.Action, SocketMessager.SYS_TEST_LINK.Action) != 0) {
+				ReceiveEventArgs e = new ReceiveEventArgs(this._receives++, messager, this);
+				SyncReceive receive = null;
+
+				if (this._receiveHandlers.TryGetValue(messager.Id, out receive)) {
+					this._server._receiveSyncWQ.Enqueue(delegate () {
+						try {
+							receive.ReceiveHandler(this, e);
+						} catch (Exception ex) {
+							this.OnError(ex);
+						} finally {
+							receive.Wait.Set();
+						}
+					});
+				} else {
+					this._server._receiveWQ.Enqueue(delegate () {
+						this.OnReceive(e);
+					});
+				}
+			}
+			this._lastActive = DateTime.Now;
+			HandleDataReceived();
+		}
+
+		class DataReadInfo {
+			public DataReadInfoType Type { get; set; }
+			public AcceptSocket AcceptSocket { get; }
+			public NetworkStream NetworkStream { get; }
+			public byte[] Buffer { get; }
+			public int Size { get; }
+			public int Over { get; set; }
+			public MemoryStream ResponseStream { get; set; }
+			public DataReadInfo(DataReadInfoType type, AcceptSocket client, NetworkStream ns, int bufferSize, int size) {
+				this.Type = type;
+				this.AcceptSocket = client;
+				this.NetworkStream = ns;
+				this.Buffer = new byte[bufferSize];
+				this.Size = size;
+				this.Over = size;
+				this.ResponseStream = new MemoryStream();
+			}
+
+			public void BeginRead() {
+				this.AcceptSocket._beginRead = this.NetworkStream.BeginRead(this.Buffer, 0, this.Over < this.Buffer.Length ? this.Over : this.Buffer.Length, HandleDataRead, this);
+			}
+		}
+		enum DataReadInfoType { Head, Body }
+
+		static void HandleDataRead(IAsyncResult ar) {
+			DataReadInfo dr = ar.AsyncState as DataReadInfo;
+			if (dr.AcceptSocket._running) {
+				int overs = 0;
+				try {
+					overs = dr.NetworkStream.EndRead(ar);
+				} catch(Exception ex) {
+					dr.AcceptSocket.OnError(ex);
+					return;
+				}
+				if (overs > 0) dr.ResponseStream.Write(dr.Buffer, 0, overs);
+
+				dr.Over -= overs;
+				if (dr.Over > 0) {
+					dr.BeginRead();
+
+				} else if (dr.Type == DataReadInfoType.Head) {
+
+					var bodySizeBuffer = dr.ResponseStream.ToArray();
+					if (int.TryParse(Encoding.UTF8.GetString(bodySizeBuffer, 0, bodySizeBuffer.Length), NumberStyles.HexNumber, null, out overs)) {
+						DataReadInfo drBody = new DataReadInfo(DataReadInfoType.Body, dr.AcceptSocket, dr.NetworkStream, 1024, overs - BaseSocket.HeadLength);
+						drBody.BeginRead();
+					}
+				} else {
+					dr.AcceptSocket.OnDataAvailable(dr);
+				}
+			}
 		}
 
 		public void Close() {
-			this._running = false;
-			if (this._tcpClient != null) {
-				this._tcpClient.Dispose();
-				this._tcpClient = null;
-			}
-			this._server.CloseClient(this);
-			int[] keys = new int[this._receiveHandlers.Count];
-			try {
-				this._receiveHandlers.Keys.CopyTo(keys, 0);
-			} catch {
-				lock (this._receiveHandlers_lock) {
-					keys = new int[this._receiveHandlers.Count];
+			if (this._running == true) {
+				this._beginRead.AsyncWaitHandle.Close();
+
+				this._running = false;
+				if (this._tcpClient != null) {
+					this._tcpClient.Dispose();
+					this._tcpClient = null;
+				}
+				this.OnClosed();
+				this._server.CloseClient(this);
+				int[] keys = new int[this._receiveHandlers.Count];
+				try {
 					this._receiveHandlers.Keys.CopyTo(keys, 0);
+				} catch {
+					lock (this._receiveHandlers_lock) {
+						keys = new int[this._receiveHandlers.Count];
+						this._receiveHandlers.Keys.CopyTo(keys, 0);
+					}
 				}
-			}
-			foreach (int key in keys) {
-				SyncReceive receiveHandler = null;
-				if (this._receiveHandlers.TryGetValue(key, out receiveHandler)) {
-					receiveHandler.Wait.Set();
+				foreach (int key in keys) {
+					SyncReceive receiveHandler = null;
+					if (this._receiveHandlers.TryGetValue(key, out receiveHandler)) {
+						receiveHandler.Wait.Set();
+					}
 				}
-			}
-			lock (this._receiveHandlers_lock) {
-				this._receiveHandlers.Clear();
+				lock (this._receiveHandlers_lock) {
+					this._receiveHandlers.Clear();
+				}
 			}
 		}
 
@@ -335,7 +383,7 @@ public class ServerSocket : IDisposable {
 				if (this._running) {
 					lock (_write_lock) {
 						NetworkStream ns = this._tcpClient.GetStream();
-						base.Write(ns, messager);
+						base.WriteAsync(ns, messager);
 					}
 					this._lastActive = DateTime.Now;
 

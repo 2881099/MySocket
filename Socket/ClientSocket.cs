@@ -16,10 +16,11 @@ public class ClientSocket : BaseSocket, IDisposable {
 	private Dictionary<int, SyncReceive> _receiveHandlers = new Dictionary<int, SyncReceive>();
 	private object _receiveHandlers_lock = new object();
 	private DateTime _lastActive;
+	private ManualResetEvent _closeWait;
 	public event ClientSocketClosedEventHandler Closed;
 	public event ClientSocketReceiveEventHandler Receive;
 	public event ClientSocketErrorEventHandler Error;
-
+	
 	private WorkQueue _receiveWQ;
 	private WorkQueue _receiveSyncWQ;
 
@@ -28,7 +29,7 @@ public class ClientSocket : BaseSocket, IDisposable {
 			this._running = true;
 			try {
 				this._tcpClient = new TcpClient();
-				this._tcpClient.ConnectAsync(hostname, port);
+				this._tcpClient.Connect(hostname, port);
 				this._receiveWQ = new WorkQueue();
 				this._receiveSyncWQ = new WorkQueue();
 			} catch (Exception ex) {
@@ -40,7 +41,8 @@ public class ClientSocket : BaseSocket, IDisposable {
 			this._receives = 0;
 			this._errors = 0;
 			this._lastActive = DateTime.Now;
-			this._thread = new Thread(delegate() {
+			ManualResetEvent waitWelcome = new ManualResetEvent(false);
+			this._thread = new Thread(delegate () {
 				while (this._running) {
 					try {
 						NetworkStream ns = this._tcpClient.GetStream();
@@ -52,6 +54,7 @@ public class ClientSocket : BaseSocket, IDisposable {
 								string.Compare(messager.Action, SocketMessager.SYS_HELLO_WELCOME.Action) == 0) {
 								this._receives++;
 								this.Write(messager);
+								waitWelcome.Set();
 							} else if (string.Compare(messager.Action, SocketMessager.SYS_ACCESS_DENIED.Action) == 0) {
 								throw new Exception(SocketMessager.SYS_ACCESS_DENIED.Action);
 							} else {
@@ -59,7 +62,7 @@ public class ClientSocket : BaseSocket, IDisposable {
 								SyncReceive receive = null;
 
 								if (this._receiveHandlers.TryGetValue(messager.Id, out receive)) {
-									this._receiveSyncWQ.Enqueue(delegate() {
+									this._receiveSyncWQ.Enqueue(delegate () {
 										try {
 											receive.ReceiveHandler(this, e);
 										} catch (Exception ex) {
@@ -69,7 +72,7 @@ public class ClientSocket : BaseSocket, IDisposable {
 										}
 									});
 								} else if (this.Receive != null) {
-									this._receiveWQ.Enqueue(delegate() {
+									this._receiveWQ.Enqueue(delegate () {
 										this.OnReceive(e);
 									});
 								}
@@ -89,33 +92,54 @@ public class ClientSocket : BaseSocket, IDisposable {
 				}
 				this.Close();
 				this.OnClosed();
+
+				try {
+					this._tcpClient.Close();
+				} catch { }
+				this._tcpClient.Dispose();
+				this._tcpClient = null;
+
+				int[] keys = new int[this._receiveHandlers.Count];
+				try {
+					this._receiveHandlers.Keys.CopyTo(keys, 0);
+				} catch {
+					lock (this._receiveHandlers_lock) {
+						keys = new int[this._receiveHandlers.Count];
+						this._receiveHandlers.Keys.CopyTo(keys, 0);
+					}
+				}
+				foreach (int key in keys) {
+					SyncReceive receiveHandler = null;
+					if (this._receiveHandlers.TryGetValue(key, out receiveHandler)) {
+						receiveHandler.Wait.Set();
+					}
+				}
+				lock (this._receiveHandlers_lock) {
+					this._receiveHandlers.Clear();
+				}
+				if (this._receiveWQ != null) {
+					this._receiveWQ.Dispose();
+				}
+				if (this._receiveSyncWQ != null) {
+					this._receiveSyncWQ.Dispose();
+				}
+				if (this._closeWait != null) {
+					this._closeWait.Set();
+				}
 			});
 			this._thread.Start();
+			waitWelcome.Reset();
+			waitWelcome.WaitOne(TimeSpan.FromSeconds(5));
 		}
 	}
 
 	public void Close() {
-		if (this._tcpClient != null) {
-			this._tcpClient.Dispose();
-			this._tcpClient = null;
-		}
-		int[] keys = new int[this._receiveHandlers.Count];
-		try {
-			this._receiveHandlers.Keys.CopyTo(keys, 0);
-		} catch {
-			lock (this._receiveHandlers_lock) {
-				keys = new int[this._receiveHandlers.Count];
-				this._receiveHandlers.Keys.CopyTo(keys, 0);
-			}
-		}
-		foreach (int key in keys) {
-			SyncReceive receiveHandler = null;
-			if (this._receiveHandlers.TryGetValue(key, out receiveHandler)) {
-				receiveHandler.Wait.Set();
-			}
-		}
-		lock (this._receiveHandlers_lock) {
-			this._receiveHandlers.Clear();
+		if (this._running == true) {
+			this.Write(SocketMessager.SYS_QUIT);
+			this._closeWait = new ManualResetEvent(false);
+			this._closeWait.Reset();
+			this._running = false;
+			this._closeWait.WaitOne();
 		}
 	}
 
@@ -138,17 +162,19 @@ public class ClientSocket : BaseSocket, IDisposable {
 					}
 				}
 			}
-			lock (_write_lock) {
-				NetworkStream ns = this._tcpClient.GetStream();
-				base.Write(ns, messager);
-			}
-			this._lastActive = DateTime.Now;
-			if (syncReceive != null) {
-				syncReceive.Wait.Reset();
-				syncReceive.Wait.WaitOne(timeout);
-				syncReceive.Wait.Set();
-				lock (this._receiveHandlers_lock) {
-					this._receiveHandlers.Remove(messager.Id);
+			if (this._running) {
+				lock (_write_lock) {
+					NetworkStream ns = this._tcpClient.GetStream();
+					base.Write(ns, messager);
+				}
+				this._lastActive = DateTime.Now;
+				if (syncReceive != null) {
+					syncReceive.Wait.Reset();
+					syncReceive.Wait.WaitOne(timeout);
+					syncReceive.Wait.Set();
+					lock (this._receiveHandlers_lock) {
+						this._receiveHandlers.Remove(messager.Id);
+					}
 				}
 			}
 		} catch (Exception ex) {

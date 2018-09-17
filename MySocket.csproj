@@ -4,12 +4,12 @@
     <AssemblyName>MySocket</AssemblyName>
     <PackageId>MySocket</PackageId>
     <RootNamespace>MySocket</RootNamespace>
-    <Version>1.0.2</Version>
+    <Version>2.0.0</Version>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageProjectUrl>https://github.com/2881099/MySocket</PackageProjectUrl>
-    <Description>Socket服务端与客户端的封装（基于线程），支持.NETCore</Description>
+    <Description>Socket服务端与客户端的封装，支持.NETCore</Description>
     <RepositoryUrl>https://github.com/2881099/MySocket</RepositoryUrl>
-    <PackageTags>socket server client 服务端 客户端</PackageTags>
+    <PackageTags>socket IOCP EPOLL server client 服务端 客户端 异步</PackageTags>
     <WarningLevel>3</WarningLevel>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
