@@ -19,7 +19,8 @@ server.Closed += (a, b) => {
 	Console.WriteLine("{0} 关闭了连接：{1}", DateTime.Now, b.AcceptSocketId);
 };
 server.Error += (a, b) => {
-	Console.WriteLine("{0} 发生错误({1})：{2}", DateTime.Now, b.Errors, b.Exception.Message + b.Exception.StackTrace);
+	Console.WriteLine("{0} 发生错误({1})：{2}", DateTime.Now, b.Errors, 
+		b.Exception.Message + b.Exception.StackTrace);
 };
 server.Start();
 Console.ReadKey();
@@ -40,7 +41,8 @@ server.Closed += (a, b) => {
 	Console.WriteLine("{0} 关闭了连接：{1}", DateTime.Now, b.AcceptSocketId);
 };
 server.Error += (a, b) => {
-	Console.WriteLine("{0} 发生错误({1})：{2}", DateTime.Now, b.Errors, b.Exception.Message + b.Exception.StackTrace);
+	Console.WriteLine("{0} 发生错误({1})：{2}", DateTime.Now, b.Errors, 
+		b.Exception.Message + b.Exception.StackTrace);
 };
 server.Start();
 Console.ReadKey();
@@ -51,7 +53,8 @@ Console.ReadKey();
 ```csharp
 var client = new ClientSocket();
 client.Error += (sender, e) => {
-	Console.WriteLine("[" + DateTime.Now.ToString("MM-dd HH:mm:ss") + "] " + e.Exception.Message + e.Exception.StackTrace);
+	Console.WriteLine("[" + DateTime.Now.ToString("MM-dd HH:mm:ss") + "] " 
+		+ e.Exception.Message + e.Exception.StackTrace);
 };
 client.Receive += (sender, e) => {
 	switch (e.Messager.Action) {
