@@ -34,14 +34,15 @@ public class BaseSocket {
 			ms.Write(buff, 0, buff.Length);
 			if (messager.Arg != null) {
 				var data = BaseSocket.Serialize(messager.Arg);
-				using (MemoryStream msBuf = new MemoryStream()) {
-					using (DeflateStream ds = new DeflateStream(msBuf, CompressionMode.Compress)) {
-						ds.Write(data, 0, data.Length);
-						buff = msBuf.ToArray();
-						ms.Write(buff, 0, buff.Length);
-					}
-				}
-			}
+                ms.Write(data, 0, data.Length);
+                //using (MemoryStream msBuf = new MemoryStream()) {
+                //	using (DeflateStream ds = new DeflateStream(msBuf, CompressionMode.Compress)) {
+                //		ds.Write(data, 0, data.Length);
+                //		buff = msBuf.ToArray();
+                //		ms.Write(buff, 0, buff.Length);
+                //	}
+                //}
+            }
 			return this.GetWriteBuffer(ms.ToArray());
 		}
 	}
@@ -207,16 +208,17 @@ public class SocketMessager {
 		string loc4 = loc1.Length > 2 ? loc1[2].Replace("\\\\", "\\").Replace("\\t", "\t").Replace("\\n", "\r\n") : null;
 		string loc5 = loc1.Length > 3 ? loc1[3] : null;
 		SocketMessager messager;
-		using (MemoryStream ms = new MemoryStream()) {
-			ms.Write(data, idx + 2, data.Length - idx - 2);
-			using (DeflateStream ds = new DeflateStream(ms, CompressionMode.Decompress)) {
-				using (MemoryStream msOut = new MemoryStream()) {
-					ds.CopyTo(msOut);
-					messager = new SocketMessager(loc3, loc4, ms.Length > 0 ? BaseSocket.Deserialize(ms.ToArray()) : null);
-				}
-			}
-		}
-		if (int.TryParse(loc2, out idx)) messager._id = idx;
+        using (MemoryStream ms = new MemoryStream()) {
+        	ms.Write(data, idx + 2, data.Length - idx - 2);
+            messager = new SocketMessager(loc3, loc4, ms.Length > 0 ? BaseSocket.Deserialize(ms.ToArray()) : null);
+            //using (DeflateStream ds = new DeflateStream(ms, CompressionMode.Decompress)) {
+            //	using (MemoryStream msOut = new MemoryStream()) {
+            //		ds.CopyTo(msOut);
+            //		messager = new SocketMessager(loc3, loc4, ms.Length > 0 ? BaseSocket.Deserialize(ms.ToArray()) : null);
+            //	}
+            //}
+        }
+        if (int.TryParse(loc2, out idx)) messager._id = idx;
 		if (!string.IsNullOrEmpty(loc5)) DateTime.TryParse(loc5, out messager._remoteTime);
 		if (messager._arg is Exception) messager._exception = messager._arg as Exception;
 		return messager;
