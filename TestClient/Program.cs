@@ -28,7 +28,7 @@ namespace TestClient
             Console.WriteLine(dbs);
             Console.WriteLine("sldkjglsjdglksdg");
             //若不传递第二个委托参数，线程不会等待结果，服务端响应后由 client.Receive 处理
-            //Console.ReadKey();
+            Console.ReadKey();
             client.Close();
         }
     }

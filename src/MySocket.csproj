@@ -4,7 +4,7 @@
     <AssemblyName>MySocket</AssemblyName>
     <PackageId>MySocket</PackageId>
     <RootNamespace>MySocket</RootNamespace>
-    <Version>2.0.1</Version>
+    <Version>2.0.2</Version>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageProjectUrl>https://github.com/2881099/MySocket</PackageProjectUrl>
     <Description>Socket服务端与客户端的封装，支持.NETCore</Description>

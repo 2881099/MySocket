@@ -7,7 +7,7 @@ namespace TestServer
         static void Main(string[] args)
         {
 
-            var server = new ServerSocket(19990); //监听0.0.0.0:19990
+            var server = new ServerSocketAsync(19990); //监听0.0.0.0:19990
             server.Receive += (a, b) => {
                 Console.WriteLine("{0} 接受到了消息{1}：{2}", DateTime.Now, b.Receives, b.Messager);
                 b.AcceptSocket.Write(b.Messager);

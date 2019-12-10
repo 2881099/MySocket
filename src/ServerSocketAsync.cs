@@ -283,6 +283,7 @@ public class ServerSocketAsync : IDisposable {
 			public byte[] Buffer { get; }
 			public int Size { get; }
 			public int Over { get; set; }
+            public int OverZoreTimes { get; set; }
 			public MemoryStream ResponseStream { get; set; }
 			public DataReadInfo(DataReadInfoType type, AcceptSocket client, NetworkStream ns, int bufferSize, int size) {
 				this.Type = type;
@@ -310,7 +311,13 @@ public class ServerSocketAsync : IDisposable {
 					dr.AcceptSocket.OnError(ex);
 					return;
 				}
-				if (overs > 0) dr.ResponseStream.Write(dr.Buffer, 0, overs);
+                if (overs > 0)
+                {
+                    dr.ResponseStream.Write(dr.Buffer, 0, overs);
+                    dr.OverZoreTimes = 0;
+                }
+                else if (++dr.OverZoreTimes > 10)
+                    return;
 
 				dr.Over -= overs;
 				if (dr.Over > 0) {
